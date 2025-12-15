@@ -11,6 +11,7 @@ __pycache__/
 # =====================
 venv/
 .env/
+backend/env
 .env.*
 !.env.example
 
@@ -39,3 +40,6 @@ alembic/versions/__pycache__/
 # VS Code
 # =====================
 .vscode/
+
+backend/scripts/create_admin.py
+
