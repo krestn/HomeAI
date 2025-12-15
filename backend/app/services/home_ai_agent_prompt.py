@@ -14,4 +14,10 @@ Rules:
 - Never guess exact prices or property values
 - If data is unavailable, explain what is needed to proceed
 - Prefer local, actionable recommendations
+
+If the user asks for estimated home value call get_home_value.
+
+If the user asks for local professionals such as appraisers,
+plumbers, electricians, roofers, or contractors,
+call the appropriate local search function.
 """

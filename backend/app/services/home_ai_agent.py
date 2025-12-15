@@ -4,7 +4,16 @@ from app.services.openwebninja_zillow_api import (
     get_property_details_by_address,
     get_zestimate_from_data,
 )
+from app.services.google_places import find_local_appraisers
 import json
+
+CURRENT_PROPERTY_ADDRESSES = (
+    [
+        "1600 Zenobia Street, Denver, CO 80204",
+        "3545 Lincoln Place Dr, Des Moines, IA 50312",
+        "129 Vernon Dr. Bolingbrook, IL",
+    ],
+)
 
 
 def get_home_value(address: str) -> str:
@@ -13,6 +22,13 @@ def get_home_value(address: str) -> str:
         return get_zestimate_from_data(property_details)
     except Exception as e:
         return f"Error fetching value: {str(e)}"
+
+
+def get_local_appraisers(city_state: str) -> list[dict]:
+    try:
+        return find_local_appraisers(city_state)
+    except Exception as e:
+        return {"error": str(e)}
 
 
 def run_home_agent(message: str) -> str:
@@ -29,41 +45,64 @@ def run_home_agent(message: str) -> str:
         functions=[
             {
                 "name": "get_home_value",
-                "description": "Get the estimated value of a home based on its address using OpenWeb Ninja API",
+                "description": "Get an estimated home value for a specific property address.",
                 "parameters": {
                     "type": "object",
-                    "properties": {"address": {"type": "string"}},
+                    "properties": {
+                        "address": {
+                            "type": "string",
+                            "description": "Full street address of the home",
+                        }
+                    },
                     "required": ["address"],
                 },
-            }
+            },
+            {
+                "name": "get_local_appraisers",
+                "description": "Find local real estate appraisers near a city and state.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "city_state": {
+                            "type": "string",
+                            "description": "City and state, e.g. 'Austin, TX'",
+                        }
+                    },
+                    "required": ["city_state"],
+                },
+            },
         ],
         function_call="auto",
     )
 
     message_data = response.choices[0].message
 
-    # Check if the model decided to call a function
-    if message_data.function_call is not None:
+    if message_data.function_call:
         func_name = message_data.function_call.name
         arguments = json.loads(message_data.function_call.arguments)
 
         if func_name == "get_home_value":
-            home_value = get_home_value(arguments["address"])
+            result = get_home_value(arguments["address"])
 
-            # Feed the function result back to the model for a friendly response
-            follow_up = client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": HOME_AGENT_SYSTEM_PROMPT},
-                    {"role": "user", "content": message},
-                    {
-                        "role": "function",
-                        "name": func_name,
-                        "content": json.dumps({"value": home_value}),
-                    },
-                ],
-            )
-            return follow_up.choices[0].message.content
+        elif func_name == "get_local_appraisers":
+            result = get_local_appraisers(arguments["city_state"])
 
-    # Otherwise return the model's normal response
+        else:
+            result = {"error": "Unknown function"}
+
+        follow_up = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": HOME_AGENT_SYSTEM_PROMPT},
+                {"role": "user", "content": message},
+                {
+                    "role": "function",
+                    "name": func_name,
+                    "content": json.dumps(result),
+                },
+            ],
+        )
+
+        return follow_up.choices[0].message.content
+
     return message_data.content
