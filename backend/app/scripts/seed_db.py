@@ -59,15 +59,33 @@ def seed():
             country="US",
             formatted_address="129 Vernon Dr. Bolingbrook, IL 60544",
         )
+        property_2 = Property(
+            street_address="704 Claremont Ave.",
+            city="Chicago",
+            county="Cook",
+            state="IL",
+            postal_code="60612",
+            country="US",
+            formatted_address="704 Claremont Ave. Chicago, IL 60612",
+        )
 
-        db.add(property_1)
+        db.add_all([property_1, property_2]),
         db.commit()
         db.refresh(property_1)
+        db.refresh(property_2)
 
         # ---------- PROPERTY RELATIONSHIPS ----------
-        owner_relationship = PropertyUsers(
+        owner_relationship1 = PropertyUsers(
             user_id=owner.id,
             property_id=property_1.id,
+            role="owner",
+            start_date=datetime.utcnow(),
+            is_active=True,
+        )
+
+        owner_relationship2 = PropertyUsers(
+            user_id=owner.id,
+            property_id=property_2.id,
             role="owner",
             start_date=datetime.utcnow(),
             is_active=True,
@@ -91,7 +109,8 @@ def seed():
 
         db.add_all(
             [
-                owner_relationship,
+                owner_relationship1,
+                owner_relationship2,
                 renter_relationship,
                 plumber_relationship,
             ]
