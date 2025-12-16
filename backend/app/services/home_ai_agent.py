@@ -4,7 +4,7 @@ from app.services.openwebninja_zillow_api import (
     get_property_details_by_address,
     get_zestimate_from_data,
 )
-from app.services.google_places import find_local_appraisers
+from app.services.google_places import find_local_services
 import json
 
 CURRENT_PROPERTY_ADDRESSES = (
@@ -21,14 +21,26 @@ def get_home_value(address: str) -> str:
         property_details = get_property_details_by_address(address)
         return get_zestimate_from_data(property_details)
     except Exception as e:
-        return f"Error fetching value: {str(e)}"
+        return {
+            "success": False,
+            "error": str(e),
+            "results": [],
+        }
 
 
-def get_local_appraisers(city_state: str) -> list[dict]:
+def get_local_services(service: str, city_state: str) -> list[dict]:
     try:
-        return find_local_appraisers(city_state)
+        return find_local_services(service, city_state)
     except Exception as e:
         return {"error": str(e)}
+
+
+FUNCTION_REGISTRY = {
+    "get_home_value": lambda args: get_home_value(args["address"]),
+    "get_local_services": lambda args: get_local_services(
+        args["service"], args["city_state"]
+    ),
+}
 
 
 def run_home_agent(message: str) -> str:
@@ -58,17 +70,21 @@ def run_home_agent(message: str) -> str:
                 },
             },
             {
-                "name": "get_local_appraisers",
-                "description": "Find local real estate appraisers near a city and state.",
+                "name": "get_local_services",
+                "description": "Find local services near a city and state.",
                 "parameters": {
                     "type": "object",
                     "properties": {
+                        "service": {
+                            "type": "string",
+                            "description": "Liscenced service, e.g. 'Plumber', 'Electrician', 'Roofer', 'Appraiser'",
+                        },
                         "city_state": {
                             "type": "string",
                             "description": "City and state, e.g. 'Austin, TX'",
-                        }
+                        },
                     },
-                    "required": ["city_state"],
+                    "required": ["service", "city_state"],
                 },
             },
         ],
@@ -81,14 +97,11 @@ def run_home_agent(message: str) -> str:
         func_name = message_data.function_call.name
         arguments = json.loads(message_data.function_call.arguments)
 
-        if func_name == "get_home_value":
-            result = get_home_value(arguments["address"])
-
-        elif func_name == "get_local_appraisers":
-            result = get_local_appraisers(arguments["city_state"])
-
+        handler = FUNCTION_REGISTRY.get(func_name)
+        if not handler:
+            result = {"error": f"Unknown function {func_name}"}
         else:
-            result = {"error": "Unknown function"}
+            result = handler(arguments)
 
         follow_up = client.chat.completions.create(
             model="gpt-3.5-turbo",

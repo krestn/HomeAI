@@ -16,7 +16,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from app.core.config import settings
 from app.core.database import Base
-from app.models.user import User  # IMPORTANT: import model
+from app.models import User, Property, PropertyUsers
 
 target_metadata = Base.metadata
 

@@ -25,12 +25,12 @@ def get_place_details(place_id: str) -> dict:
     return res.json().get("result", {})
 
 
-def find_local_appraisers(city_state: str) -> list[dict]:
+def find_local_services(service: str, city_state: str) -> list[dict]:
     """
-    Find licensed real estate appraisers near a given city/state.
+    Find licensed home services near a given city/state.
     """
     params = {
-        "query": f"real estate appraiser near {city_state}",
+        "query": f"{service} near {city_state}",
         "key": GOOGLE_API_KEY,
     }
 
