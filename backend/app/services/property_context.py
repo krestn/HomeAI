@@ -13,3 +13,11 @@ def get_user_properties(db: Session, user_id: int) -> list[Property]:
         )
         .all()
     )
+
+
+def serialize_property(property_obj: Property) -> dict:
+    return {
+        "id": property_obj.id,
+        "address": property_obj.formatted_address,
+        "city_state": f"{property_obj.city}, {property_obj.state}",
+    }

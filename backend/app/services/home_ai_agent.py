@@ -1,18 +1,25 @@
 from app.services.openai_client import client
-from app.services.home_ai_agent_prompt import HOME_AGENT_SYSTEM_PROMPT
+from app.services.home_ai_agent_prompt import (
+    HOME_AGENT_SYSTEM_PROMPT,
+    GENERAL_AGENT_SYSTEM_PROMPT,
+)
+
+import re
 from app.services.openwebninja_zillow_api import (
     get_property_details_by_address,
     get_zestimate_from_data,
 )
 from app.services.google_places import find_local_services
-from app.services.property_context import get_user_properties
+from app.services.property_context import get_user_properties, serialize_property
 from sqlalchemy.orm import Session
 import json
+from app.services.non_property_intent import is_non_property_question
 
 
 # ----------------------------
 # Tool functions
 # ----------------------------
+
 
 def get_home_value(address: str) -> str:
     property_details = get_property_details_by_address(address)
@@ -31,9 +38,65 @@ FUNCTION_REGISTRY = {
 }
 
 
+def format_property_summary(properties: list[dict]) -> str:
+    return "\n".join(
+        f"- ({p['id']}) {p['address']} - {p['city_state']}" for p in properties
+    )
+
+
+def resolve_property_from_message(message: str, properties: list[dict]) -> dict | None:
+    """
+    Attempt to infer which property the user referenced in free-form text.
+    Supports matching by property ID (number) or address/city strings.
+    """
+    text = message.lower()
+    tokens = re.findall(r"[a-z0-9]+", text)
+
+    # Look for explicit numeric IDs in the message
+    id_tokens = re.findall(r"\d+", message)
+    for token in id_tokens:
+        for property_obj in properties:
+            if str(property_obj["id"]) == token:
+                return property_obj
+
+    # Fall back to address/city substring matching
+    for property_obj in properties:
+        address_text = property_obj["address"].lower()
+        city_state_text = property_obj["city_state"].lower()
+
+        if address_text in text or text in address_text:
+            return property_obj
+        if city_state_text in text or text in city_state_text:
+            return property_obj
+
+        for token in tokens:
+            if len(token) < 3:
+                continue
+            if token in address_text or token in city_state_text:
+                return property_obj
+
+    return None
+
+
+def build_agent_response(
+    *,
+    reply: str,
+    active_property: dict | None,
+    all_properties: list[dict],
+    requires_property_selection: bool = False,
+) -> dict:
+    return {
+        "reply": reply,
+        "active_property": active_property,
+        "available_properties": all_properties,
+        "requires_property_selection": requires_property_selection,
+    }
+
+
 # ----------------------------
 # Property context resolution
 # ----------------------------
+
 
 def resolve_property_context(db: Session, user_id: int) -> dict:
     """
@@ -49,27 +112,19 @@ def resolve_property_context(db: Session, user_id: int) -> dict:
             "error": "No property found for your account. Please add a property first."
         }
 
-    if len(properties) == 1:
-        p = properties[0]
+    serialized_properties = [serialize_property(p) for p in properties]
+
+    if len(serialized_properties) == 1:
         return {
             "resolved": True,
-            "property": {
-                "id": p.id,
-                "address": p.formatted_address,
-                "city_state": f"{p.city}, {p.state}",
-            },
+            "property": serialized_properties[0],
+            "all_properties": serialized_properties,
         }
 
     return {
         "resolved": False,
-        "options": [
-            {
-                "id": p.id,
-                "address": p.formatted_address,
-                "city_state": f"{p.city}, {p.state}",
-            }
-            for p in properties
-        ],
+        "options": serialized_properties,
+        "all_properties": serialized_properties,
     }
 
 
@@ -77,57 +132,110 @@ def resolve_property_context(db: Session, user_id: int) -> dict:
 # Main agent runner
 # ----------------------------
 
+
 def run_home_agent(
     *,
     db: Session,
     user_id: int,
     message: str,
     property_id: int | None = None,
-) -> str:
+) -> dict:
     """
     User-aware Home AI Agent
     """
+
+    # ----------------------------
+    # Non-property questions path
+    # ----------------------------
+    if is_non_property_question(message):
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": GENERAL_AGENT_SYSTEM_PROMPT},
+                {"role": "user", "content": message},
+            ],
+            # No property tools for general questions
+        )
+
+        reply_text = response.choices[0].message.content
+        return build_agent_response(
+            reply=reply_text,
+            active_property=None,
+            all_properties=[],
+            requires_property_selection=False,
+        )
 
     context = resolve_property_context(db, user_id)
 
     # ---- Hard error
     if "error" in context:
-        return context["error"]
+        return build_agent_response(
+            reply=context["error"],
+            active_property=None,
+            all_properties=context.get("all_properties", []),
+            requires_property_selection=False,
+        )
+
+    all_properties = context.get("all_properties", [])
+    active_property: dict | None = None
 
     # ---- Multiple properties
     if not context["resolved"]:
-        if not property_id:
+        if property_id is not None:
+            selected = next(
+                (p for p in context["options"] if p["id"] == property_id),
+                None,
+            )
+
+            if not selected:
+                return build_agent_response(
+                    reply="Invalid property selection.",
+                    active_property=None,
+                    all_properties=all_properties,
+                    requires_property_selection=True,
+                )
+
+            active_property = selected
+
+        inferred_property = resolve_property_from_message(message, context["options"])
+        if inferred_property:
+            active_property = inferred_property
+
+        if not active_property:
             addresses = "\n".join(
                 f"- ({p['id']}) {p['address']}" for p in context["options"]
             )
-            return (
-                "You have multiple properties. Which one are you referring to?\n\n"
-                f"{addresses}"
+            return build_agent_response(
+                reply=(
+                    "You have multiple properties. Which one are you referring to?\n\n"
+                    f"{addresses}"
+                ),
+                active_property=None,
+                all_properties=all_properties,
+                requires_property_selection=True,
             )
-
-        selected = next(
-            (p for p in context["options"] if p["id"] == property_id),
-            None,
-        )
-
-        if not selected:
-            return "Invalid property selection."
-
-        property_address = selected["address"]
-        city_state = selected["city_state"]
 
     # ---- Single property
     else:
-        property_address = context["property"]["address"]
-        city_state = context["property"]["city_state"]
+        active_property = context["property"]
+
+    property_address = active_property["address"]
+    city_state = active_property["city_state"]
 
     # ----------------------------
     # Inject property context
     # ----------------------------
 
+    properties_summary = format_property_summary(all_properties)
+    if not properties_summary:
+        properties_summary = "- No properties available."
+
     system_prompt = (
         HOME_AGENT_SYSTEM_PROMPT
+        + "\n\nUser properties on file:\n"
+        + properties_summary
         + "\n\nThe user is referring to this property:\n"
+        + f"Property ID: {active_property['id']}\n"
         + f"Address: {property_address}\n"
         + f"City/State: {city_state}\n"
         + "Do not ask for the address unless the user explicitly changes properties."
@@ -199,6 +307,16 @@ def run_home_agent(
             ],
         )
 
-        return follow_up.choices[0].message.content
+        reply_text = follow_up.choices[0].message.content
+        return build_agent_response(
+            reply=reply_text,
+            active_property=active_property,
+            all_properties=all_properties,
+        )
 
-    return msg.content
+    reply_text = msg.content
+    return build_agent_response(
+        reply=reply_text,
+        active_property=active_property,
+        all_properties=all_properties,
+    )
