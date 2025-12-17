@@ -1,10 +1,12 @@
 "use client";
 
 import { FormEvent, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useAuth } from "./AuthContext";
 
 export default function LoginForm() {
   const { login, isAuthenticating, authError } = useAuth();
+  const router = useRouter();
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [localError, setLocalError] = useState<string | null>(null);
@@ -14,6 +16,7 @@ export default function LoginForm() {
     setLocalError(null);
     try {
       await login(identifier, password);
+      router.replace("/");
     } catch (error) {
       if (error instanceof Error) {
         setLocalError(error.message);

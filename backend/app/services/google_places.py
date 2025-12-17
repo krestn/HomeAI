@@ -1,4 +1,5 @@
 import os
+import re
 import requests
 from dotenv import load_dotenv
 
@@ -42,6 +43,15 @@ def find_local_services(service: str, city_state: str) -> list[dict]:
 
     for place in data.get("results", [])[:5]:
         details = get_place_details(place["place_id"])
+        website = details.get("website")
+        normalized_website = None
+        if website:
+            markdown_match = re.search(r"\((https?://[^\s)]+)\)", website)
+            if markdown_match:
+                normalized_website = markdown_match.group(1)
+            else:
+                cleaned = website.replace("Website:", "").strip()
+                normalized_website = cleaned or website
 
         results.append(
             {
@@ -49,7 +59,7 @@ def find_local_services(service: str, city_state: str) -> list[dict]:
                 "address": place.get("formatted_address"),
                 "rating": place.get("rating"),
                 "phone": details.get("formatted_phone_number"),
-                "website": details.get("website"),
+                "website": normalized_website or website,
             }
         )
 

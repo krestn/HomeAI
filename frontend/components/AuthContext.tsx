@@ -16,6 +16,7 @@ type AuthContextValue = {
   logout: () => void;
   isAuthenticating: boolean;
   authError: string | null;
+  isReady: boolean;
 };
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -25,12 +26,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [isReady, setIsReady] = useState(false);
 
   useEffect(() => {
     const storedToken = window.localStorage.getItem(STORAGE_KEY);
     if (storedToken) {
       setToken(storedToken);
     }
+    setIsReady(true);
   }, []);
 
   const login = useCallback(async (identifier: string, password: string) => {
@@ -63,6 +66,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     logout,
     isAuthenticating,
     authError,
+    isReady,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

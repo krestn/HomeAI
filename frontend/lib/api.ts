@@ -7,6 +7,7 @@ export type PropertySummary = {
 export type ChatResponse = {
   reply: string;
   user_id: number;
+  user_name: string;
   active_property: PropertySummary | null;
   available_properties: PropertySummary[];
   requires_property_selection: boolean;
@@ -14,6 +15,8 @@ export type ChatResponse = {
 
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+
+export const WELCOME_TRIGGER_MESSAGE = "__homeai_welcome__";
 
 async function parseResponse<T>(response: Response): Promise<T> {
   const text = await response.text();
@@ -71,4 +74,30 @@ export async function sendChat(
   });
 
   return parseResponse<ChatResponse>(response);
+}
+
+export async function fetchWelcomeMessage(token: string) {
+  const welcomeResponse = await fetch(`${API_BASE_URL}/agent/welcome`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  if (welcomeResponse.ok) {
+    return parseResponse<ChatResponse>(welcomeResponse);
+  }
+
+  const fallbackResponse = await fetch(`${API_BASE_URL}/agent/chat`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      message: WELCOME_TRIGGER_MESSAGE,
+      property_id: null,
+    }),
+  });
+
+  return parseResponse<ChatResponse>(fallbackResponse);
 }
