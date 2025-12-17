@@ -20,6 +20,9 @@ from app.services.non_property_intent import (
 from app.services.weather import get_chicago_weather_summary
 
 
+PENDING_PROPERTY_REQUESTS: dict[int, str] = {}
+
+
 # ----------------------------
 # Tool functions
 # ----------------------------
@@ -95,6 +98,42 @@ def build_agent_response(
     }
 
 
+MULTI_PROPERTY_PROMPT = """
+You are HomeAI, an empathetic homeowner assistant.
+The user is asking something that requires knowing which of their properties is affected.
+Respond in 2 short sentences.
+- Acknowledge the user's situation using a warm, professional tone.
+- Offer help relevant to the user's message.
+- Remind them they have multiple properties and ask which one applies, but do not list the properties.
+"""
+
+
+def build_multi_property_reply(message: str, property_options: list[dict]) -> str:
+    property_list = "\n".join(
+        f"- {p['address']}, {p['city_state']}" for p in property_options
+    )
+    if not property_list:
+        property_list = "- No properties available."
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": MULTI_PROPERTY_PROMPT.strip()},
+                {"role": "user", "content": message},
+            ],
+            max_tokens=120,
+        )
+        intro = response.choices[0].message.content.strip()
+    except Exception:
+        intro = (
+            "I'm here to help and want to make sure I'm looking at the right home."
+            " Which property should we focus on?"
+        )
+
+    return f"{intro}\n\nHere are the homes I have on file:\n{property_list}"
+
+
 # ----------------------------
 # Property context resolution
 # ----------------------------
@@ -150,6 +189,7 @@ def run_home_agent(
     # Non-property questions path
     # ----------------------------
     if is_non_property_question(message):
+        PENDING_PROPERTY_REQUESTS.pop(user_id, None)
         if is_weather_question(message):
             return build_agent_response(
                 reply=get_chicago_weather_summary(),
@@ -212,14 +252,10 @@ def run_home_agent(
             active_property = inferred_property
 
         if not active_property:
-            property_list = "\n".join(
-                f"- {p['address']}, {p['city_state']}" for p in context["options"]
-            )
+            reply_text = build_multi_property_reply(message, context["options"])
+            PENDING_PROPERTY_REQUESTS[user_id] = message
             return build_agent_response(
-                reply=(
-                    "You have multiple properties. Which one do you need assistance with?\n\n"
-                    f"{property_list}"
-                ),
+                reply=reply_text,
                 active_property=None,
                 all_properties=all_properties,
                 requires_property_selection=True,
@@ -228,6 +264,8 @@ def run_home_agent(
     # ---- Single property
     else:
         active_property = context["property"]
+
+    pending_property_message = PENDING_PROPERTY_REQUESTS.pop(user_id, None)
 
     property_address = active_property["address"]
     city_state = active_property["city_state"]
@@ -251,11 +289,26 @@ def run_home_agent(
         + "Do not ask for the address unless the user explicitly changes properties."
     )
 
+    agent_message = message
+    if pending_property_message:
+        selection_note = (
+            "The user clarified the affected property is "
+            f"{property_address}, {city_state}."
+        )
+        extra = message.strip()
+        if extra:
+            agent_message = (
+                f"{pending_property_message}\n\n{selection_note}\n\n"
+                f"User follow-up: {extra}"
+            )
+        else:
+            agent_message = f"{pending_property_message}\n\n{selection_note}"
+
     response = client.chat.completions.create(
         model="gpt-3.5-turbo",
         messages=[
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": message},
+            {"role": "user", "content": agent_message},
         ],
         functions=[
             {
@@ -304,17 +357,30 @@ def run_home_agent(
 
         result = FUNCTION_REGISTRY[func_name](args)
 
+        follow_up_messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": agent_message},
+            {
+                "role": "function",
+                "name": func_name,
+                "content": json.dumps(result),
+            },
+        ]
+
+        if func_name == "get_local_services":
+            follow_up_messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "Use the service entries exactly as provided. "
+                        "Do not add numbering or bullets—keep each entry separated by blank lines."
+                    ),
+                }
+            )
+
         follow_up = client.chat.completions.create(
             model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": message},
-                {
-                    "role": "function",
-                    "name": func_name,
-                    "content": json.dumps(result),
-                },
-            ],
+            messages=follow_up_messages,
         )
 
         reply_text = follow_up.choices[0].message.content

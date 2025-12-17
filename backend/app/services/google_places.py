@@ -1,5 +1,6 @@
 import os
-import re
+from urllib.parse import urlparse
+
 import requests
 from dotenv import load_dotenv
 
@@ -26,7 +27,24 @@ def get_place_details(place_id: str) -> dict:
     return res.json().get("result", {})
 
 
-def find_local_services(service: str, city_state: str) -> list[dict]:
+def _format_website(url: str | None) -> str:
+    if not url:
+        return "N/A"
+
+    parsed = urlparse(url)
+    host = parsed.netloc or parsed.path
+    host = host.rstrip("/")
+
+    if not host:
+        return "N/A"
+
+    if not host.startswith("www.") and "." in host:
+        return f"www.{host}"
+
+    return host
+
+
+def find_local_services(service: str, city_state: str) -> list[str]:
     """
     Find licensed home services near a given city/state.
     """
@@ -39,28 +57,23 @@ def find_local_services(service: str, city_state: str) -> list[dict]:
     res.raise_for_status()
     data = res.json()
 
-    results = []
+    results: list[str] = []
 
     for place in data.get("results", [])[:5]:
         details = get_place_details(place["place_id"])
-        website = details.get("website")
-        normalized_website = None
-        if website:
-            markdown_match = re.search(r"\((https?://[^\s)]+)\)", website)
-            if markdown_match:
-                normalized_website = markdown_match.group(1)
-            else:
-                cleaned = website.replace("Website:", "").strip()
-                normalized_website = cleaned or website
+
+        name = place.get("name") or "Unknown business"
+        address = place.get("formatted_address") or "Address unavailable"
+        rating = place.get("rating") or "N/A"
+        phone = details.get("formatted_phone_number") or "N/A"
+        website = _format_website(details.get("website"))
 
         results.append(
-            {
-                "name": place.get("name"),
-                "address": place.get("formatted_address"),
-                "rating": place.get("rating"),
-                "phone": details.get("formatted_phone_number"),
-                "website": normalized_website or website,
-            }
+            f"{name}\n"
+            f"  - Address: {address}\n"
+            f"  - Phone: {phone}\n"
+            f"  - Website: {website}\n"
+            f"  - Rating: {rating}"
         )
 
     return results
