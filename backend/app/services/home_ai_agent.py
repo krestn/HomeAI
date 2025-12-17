@@ -13,7 +13,11 @@ from app.services.google_places import find_local_services
 from app.services.property_context import get_user_properties, serialize_property
 from sqlalchemy.orm import Session
 import json
-from app.services.non_property_intent import is_non_property_question
+from app.services.non_property_intent import (
+    is_non_property_question,
+    is_weather_question,
+)
+from app.services.weather import get_chicago_weather_summary
 
 
 # ----------------------------
@@ -39,9 +43,7 @@ FUNCTION_REGISTRY = {
 
 
 def format_property_summary(properties: list[dict]) -> str:
-    return "\n".join(
-        f"- ({p['id']}) {p['address']} - {p['city_state']}" for p in properties
-    )
+    return "\n".join(f"{p['address']} - {p['city_state']}" for p in properties)
 
 
 def resolve_property_from_message(message: str, properties: list[dict]) -> dict | None:
@@ -148,6 +150,14 @@ def run_home_agent(
     # Non-property questions path
     # ----------------------------
     if is_non_property_question(message):
+        if is_weather_question(message):
+            return build_agent_response(
+                reply=get_chicago_weather_summary(),
+                active_property=None,
+                all_properties=[],
+                requires_property_selection=False,
+            )
+
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
@@ -202,13 +212,13 @@ def run_home_agent(
             active_property = inferred_property
 
         if not active_property:
-            addresses = "\n".join(
-                f"- ({p['id']}) {p['address']}" for p in context["options"]
+            property_list = "\n".join(
+                f"- {p['address']}, {p['city_state']}" for p in context["options"]
             )
             return build_agent_response(
                 reply=(
-                    "You have multiple properties. Which one are you referring to?\n\n"
-                    f"{addresses}"
+                    "You have multiple properties. Which one do you need assistance with?\n\n"
+                    f"{property_list}"
                 ),
                 active_property=None,
                 all_properties=all_properties,
