@@ -9,6 +9,14 @@ export type AgentTask = {
   completed: boolean;
 };
 
+export type UserDocument = {
+  id: string;
+  original_name: string;
+  uploaded_at: string;
+  preview: string;
+  preview_url: string;
+};
+
 export type ChatResponse = {
   reply: string;
   user_id: number;
@@ -106,4 +114,58 @@ export async function fetchWelcomeMessage(token: string) {
   });
 
   return parseResponse<ChatResponse>(fallbackResponse);
+}
+
+export async function fetchDocuments(token: string) {
+  const response = await fetch(`${API_BASE_URL}/documents`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  return parseResponse<UserDocument[]>(response);
+}
+
+export async function uploadDocument(file: File, token: string) {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const response = await fetch(`${API_BASE_URL}/documents/upload`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+    body: formData,
+  });
+
+  return parseResponse<UserDocument>(response);
+}
+
+export async function deleteDocument(documentId: string, token: string) {
+  const response = await fetch(`${API_BASE_URL}/documents/${documentId}`, {
+    method: "DELETE",
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(message || "Unable to delete document.");
+  }
+}
+
+export async function downloadDocument(documentId: string, token: string) {
+  const response = await fetch(`${API_BASE_URL}/documents/${documentId}/file`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(message || "Unable to load document preview.");
+  }
+
+  return response.blob();
 }

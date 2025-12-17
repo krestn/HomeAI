@@ -20,9 +20,20 @@ REMINDER_PATTERNS = [
     r"\btodo\b",
 ]
 
+DOCUMENT_PATTERNS = [
+    r"\bdocument\b",
+    r"\bpdf\b",
+    r"\bresume\b",
+    r"\breport\b",
+    r"\bstatement\b",
+    r"\bfile\b",
+    r"\bupload\b",
+]
+
 NON_PROPERTY_PATTERNS = [
     *WEATHER_PATTERNS,
     *REMINDER_PATTERNS,
+    *DOCUMENT_PATTERNS,
     r"\btime\b",
     r"\bdate\b",
     r"\bwho are you\b",
@@ -50,3 +61,10 @@ def is_weather_question(message: str) -> bool:
     if not text:
         return False
     return any(re.search(p, text) for p in WEATHER_PATTERNS)
+
+
+def is_document_question(message: str) -> bool:
+    text = (message or "").lower().strip()
+    if not text:
+        return False
+    return any(re.search(p, text) for p in DOCUMENT_PATTERNS)

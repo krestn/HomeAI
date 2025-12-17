@@ -37,9 +37,13 @@ alembic/versions/__pycache__/
 .DS_Store
 
 # =====================
+# File storage
+# =====================
+storage/
+
+# =====================
 # VS Code
 # =====================
 .vscode/
 
 backend/scripts/create_admin.py
-

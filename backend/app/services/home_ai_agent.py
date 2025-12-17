@@ -16,9 +16,16 @@ import json
 from app.services.non_property_intent import (
     is_non_property_question,
     is_weather_question,
+    is_document_question,
 )
 from app.services.weather import get_chicago_weather_summary
 from app.services.agent_memory import memory as agent_memory
+from app.services.document_tools import (
+    DOCUMENT_FUNCTION_DEFINITIONS,
+    list_documents_for_agent,
+    search_documents_for_agent,
+    summarize_document_for_agent,
+)
 
 
 PENDING_PROPERTY_REQUESTS: dict[int, str] = {}
@@ -86,6 +93,37 @@ NEGATIVE_CONFIRMATIONS = {
     "still pending",
 }
 
+TASK_FUNCTION_DEFINITIONS = [
+    {
+        "name": "remember_user_task",
+        "description": "Store a short follow-up task or reminder for the assistant.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string",
+                    "description": "A concise summary of the follow-up action.",
+                },
+            },
+            "required": ["description"],
+        },
+    },
+    {
+        "name": "complete_user_task",
+        "description": "Mark a stored follow-up task as completed.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string",
+                    "description": "Specific task to remove. If omitted, clears all tasks.",
+                }
+            },
+            "required": [],
+        },
+    },
+]
+
 
 # ----------------------------
 # Tool functions
@@ -103,13 +141,11 @@ def get_local_services(service: str, city_state: str) -> list[dict]:
 
 def remember_user_task(*, user_id: int, description: str) -> dict:
     agent_memory.add_task(user_id, description)
-    print("Active tasks:", agent_memory.get_tasks(user_id))  # TEMP DEBUG
     return {"status": "stored", "tasks": agent_memory.get_tasks(user_id)}
 
 
 def complete_user_task(*, user_id: int, description: str | None = None) -> dict:
     agent_memory.complete_task(user_id, description)
-    print("Completed tasks:", agent_memory.get_tasks(user_id))  # TEMP DEBUG
     return {"status": "completed", "tasks": agent_memory.get_tasks(user_id)}
 
 
@@ -122,6 +158,12 @@ def execute_tool(func_name: str, args: dict, *, user_id: int) -> dict:
         return remember_user_task(user_id=user_id, description=args["description"])
     if func_name == "complete_user_task":
         return complete_user_task(user_id=user_id, description=args.get("description"))
+    if func_name == "list_user_documents":
+        return list_documents_for_agent(user_id)
+    if func_name == "summarize_user_document":
+        return summarize_document_for_agent(user_id, args["document_id"])
+    if func_name == "search_user_documents":
+        return search_documents_for_agent(user_id, args["query"])
     raise ValueError(f"Unsupported function {func_name}")
 
 
@@ -359,7 +401,11 @@ def run_home_agent(
     # ----------------------------
     # Non-property questions path
     # ----------------------------
-    if is_non_property_question(message_text):
+    general_request = is_document_question(message_text) or (
+        is_non_property_question(message_text) and not current_tasks
+    )
+
+    if general_request:
         PENDING_PROPERTY_REQUESTS.pop(user_id, None)
         if is_weather_question(message):
             reply_text = get_chicago_weather_summary()
@@ -376,36 +422,7 @@ def run_home_agent(
             {"role": "system", "content": GENERAL_AGENT_SYSTEM_PROMPT},
             {"role": "user", "content": message_text},
         ]
-        general_functions = [
-            {
-                "name": "remember_user_task",
-                "description": "Store a short follow-up task or reminder for the assistant.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "description": {
-                            "type": "string",
-                            "description": "A concise summary of the follow-up action.",
-                        },
-                    },
-                    "required": ["description"],
-                },
-            },
-            {
-                "name": "complete_user_task",
-                "description": "Mark a stored follow-up task as completed.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "description": {
-                            "type": "string",
-                            "description": "Specific task to remove. If omitted, clears all tasks.",
-                        }
-                    },
-                    "required": [],
-                },
-            },
-        ]
+        general_functions = TASK_FUNCTION_DEFINITIONS + DOCUMENT_FUNCTION_DEFINITIONS
 
         while True:
             response = client.chat.completions.create(
@@ -585,35 +602,7 @@ def run_home_agent(
                 "required": ["service", "city_state"],
             },
         },
-        {
-            "name": "remember_user_task",
-            "description": "Store a short follow-up task or reminder for the assistant.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "description": {
-                        "type": "string",
-                        "description": "A concise summary of the follow-up action.",
-                    },
-                },
-                "required": ["description"],
-            },
-        },
-        {
-            "name": "complete_user_task",
-            "description": "Mark a stored follow-up task as completed.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "description": {
-                        "type": "string",
-                        "description": "Specific task to remove. If omitted, clears all tasks.",
-                    }
-                },
-                "required": [],
-            },
-        },
-    ]
+    ] + TASK_FUNCTION_DEFINITIONS + DOCUMENT_FUNCTION_DEFINITIONS
 
     MAX_TOOL_CALLS = 2
     tool_calls = 0

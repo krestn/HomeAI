@@ -486,6 +486,101 @@ header {
   color: #475569;
 }
 
+.documents-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.document-upload {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.upload-button {
+  background: #0a84ff;
+  color: #fff;
+  padding: 0.5rem 1rem;
+  border-radius: 999px;
+  cursor: pointer;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.upload-button input {
+  display: none;
+}
+
+.upload-button.disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.document-error {
+  color: #b91c1c;
+  margin: 0;
+}
+
+.document-list {
+  list-style: none;
+  padding-left: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.document-card {
+  border: 1px solid #d9e0f0;
+  border-radius: 12px;
+  padding: 0.75rem;
+  background: #fff;
+  position: relative;
+}
+
+.document-card__meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  font-size: 0.9rem;
+  margin-bottom: 0.5rem;
+}
+
+.document-delete {
+  position: absolute;
+  top: 0.35rem;
+  right: 0.35rem;
+  border: none;
+  background: transparent;
+  color: #dc2626;
+  font-size: 1.05rem;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.document-delete:hover {
+  color: #b91c1c;
+}
+
+.document-frame-wrapper {
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #f8fafc;
+  margin-bottom: 0.5rem;
+}
+
+.document-frame {
+  width: 100%;
+  height: 220px;
+  border: none;
+  background: #fff;
+}
+
 .chat-message .service-link {
   border: none;
   padding: 0;
