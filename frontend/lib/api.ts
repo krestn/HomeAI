@@ -4,6 +4,11 @@ export type PropertySummary = {
   city_state: string;
 };
 
+export type AgentTask = {
+  description: string;
+  completed: boolean;
+};
+
 export type ChatResponse = {
   reply: string;
   user_id: number;
@@ -11,6 +16,7 @@ export type ChatResponse = {
   active_property: PropertySummary | null;
   available_properties: PropertySummary[];
   requires_property_selection: boolean;
+  tasks: AgentTask[];
 };
 
 const API_BASE_URL =

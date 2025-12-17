@@ -5,13 +5,15 @@ import { useRouter } from "next/navigation";
 import ChatPanel from "../components/ChatPanel";
 import { useAuth } from "../components/AuthContext";
 import { LogOut } from "lucide-react";
+import type { AgentTask } from "../lib/api";
 
 export default function HomePage() {
   const { token, isReady, logout } = useAuth();
   const router = useRouter();
-  const [activeTab, setActiveTab] = useState<"home" | "service" | "documents">(
-    "home"
-  );
+  const [activeTab, setActiveTab] = useState<
+    "home" | "service" | "documents" | "tasks"
+  >("home");
+  const [tasks, setTasks] = useState<AgentTask[]>([]);
 
   useEffect(() => {
     if (isReady && !token) {
@@ -37,6 +39,26 @@ export default function HomePage() {
             <p>Document storage is coming soon.</p>
           </div>
         );
+      case "tasks":
+        return (
+          <div>
+            <h3>Tasks</h3>
+            {tasks.length === 0 ? (
+              <p className="task-empty">No tasks yet. Ask HomeAI to remind you about something!</p>
+            ) : (
+              <ul className="task-list">
+                {tasks.map((task) => (
+                  <li
+                    key={task.description}
+                    className={`task-item${task.completed ? " completed" : ""}`}
+                  >
+                    <span>{task.description}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        );
       default:
         return (
           <div>
@@ -46,12 +68,13 @@ export default function HomePage() {
           </div>
         );
     }
-  }, [activeTab]);
+  }, [activeTab, tasks]);
 
   const tabs = [
     { id: "home", label: "Home" },
     { id: "service", label: "Service" },
     { id: "documents", label: "Documents" },
+    { id: "tasks", label: "Tasks" },
   ] as const;
 
   if (!isReady || !token) {
@@ -87,7 +110,11 @@ export default function HomePage() {
           </div>
         </nav>
         <div className="card">
-          <ChatPanel sideContent={sideContent} />
+          <ChatPanel
+            sideContent={sideContent}
+            onTasksUpdate={setTasks}
+            sidebarKey={activeTab}
+          />
         </div>
       </div>
     </main>

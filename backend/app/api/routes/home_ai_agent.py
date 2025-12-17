@@ -6,6 +6,7 @@ from app.api.dependencies.auth import get_current_user
 from app.core.database import get_db
 from app.models.user import User
 from app.services.home_ai_agent import run_home_agent
+from app.services.agent_memory import memory as agent_memory
 
 WELCOME_TRIGGER_MESSAGE = "__homeai_welcome__"
 
@@ -31,6 +32,7 @@ def build_welcome_response(user: User) -> dict:
         "active_property": None,
         "available_properties": [],
         "requires_property_selection": False,
+        "tasks": agent_memory.get_tasks(user.id),
     }
 
 
@@ -57,6 +59,7 @@ def chat_agent(
         "active_property": agent_result["active_property"],
         "available_properties": agent_result["available_properties"],
         "requires_property_selection": agent_result["requires_property_selection"],
+        "tasks": agent_result.get("tasks", []),
     }
 
 

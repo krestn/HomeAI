@@ -12,8 +12,17 @@ WEATHER_PATTERNS = [
     r"\bstorm\b",
 ]
 
+REMINDER_PATTERNS = [
+    r"\bremind\b",
+    r"\breminder\b",
+    r"\bfollow up\b",
+    r"\btask\b",
+    r"\btodo\b",
+]
+
 NON_PROPERTY_PATTERNS = [
     *WEATHER_PATTERNS,
+    *REMINDER_PATTERNS,
     r"\btime\b",
     r"\bdate\b",
     r"\bwho are you\b",
@@ -31,6 +40,8 @@ def is_non_property_question(message: str) -> bool:
     text = (message or "").lower().strip()
     if not text:
         return False
+    if any(re.search(p, text) for p in REMINDER_PATTERNS):
+        return True
     return any(re.search(p, text) for p in NON_PROPERTY_PATTERNS)
 
 

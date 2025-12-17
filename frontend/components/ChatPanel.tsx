@@ -11,6 +11,7 @@ import {
 import {
   fetchWelcomeMessage,
   sendChat,
+  type AgentTask,
   type ChatResponse,
   type PropertySummary,
 } from "../lib/api";
@@ -289,8 +290,12 @@ function formatMessageText(text: string, handlers?: ServiceLinkHandlers) {
 
 export default function ChatPanel({
   sideContent,
+  onTasksUpdate,
+  sidebarKey,
 }: {
   sideContent?: ReactNode;
+  onTasksUpdate?: (tasks: AgentTask[]) => void;
+  sidebarKey?: string;
 }) {
   const { token } = useAuth();
   const [messages, setMessages] = useState<Message[]>([]);
@@ -363,6 +368,7 @@ export default function ChatPanel({
 
         setMessages((prev) => [...prev, incomingMessage]);
         setProperties(response.available_properties ?? []);
+        onTasksUpdate?.(response.tasks ?? []);
         setActivePropertyId(response.active_property?.id ?? null);
         setRequiresSelection(response.requires_property_selection ?? false);
         typingDelayRef.current = null;
@@ -381,9 +387,10 @@ export default function ChatPanel({
       setMessages([]);
       setHasLoadedWelcome(false);
       setPanelView(null);
+      onTasksUpdate?.([]);
       messageCounter = 0;
     }
-  }, [token]);
+  }, [token, onTasksUpdate]);
 
   useEffect(() => {
     if (!token || hasLoadedWelcome) {
@@ -403,6 +410,7 @@ export default function ChatPanel({
           text: response.reply,
         };
         setMessages([intro]);
+        onTasksUpdate?.(response.tasks ?? []);
         setSendError(null);
       } catch (error) {
         if (!cancelled) {
@@ -424,7 +432,7 @@ export default function ChatPanel({
     return () => {
       cancelled = true;
     };
-  }, [token, hasLoadedWelcome]);
+  }, [token, hasLoadedWelcome, onTasksUpdate]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -438,6 +446,12 @@ export default function ChatPanel({
     },
     []
   );
+
+  useEffect(() => {
+    if (sidebarKey !== undefined) {
+      setPanelView(null);
+    }
+  }, [sidebarKey]);
 
   const serviceHandlers: ServiceLinkHandlers = {
     onAddressClick: ({ name, address }) => {

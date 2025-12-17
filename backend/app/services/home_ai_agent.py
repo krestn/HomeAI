@@ -18,9 +18,73 @@ from app.services.non_property_intent import (
     is_weather_question,
 )
 from app.services.weather import get_chicago_weather_summary
+from app.services.agent_memory import memory as agent_memory
 
 
 PENDING_PROPERTY_REQUESTS: dict[int, str] = {}
+LAST_AGENT_REPLY: dict[int, str] = {}
+PENDING_TASK_CONFIRMATIONS: dict[int, str] = {}
+
+COMPLETION_KEYWORDS = [
+    "complete",
+    "completed",
+    "finish",
+    "finished",
+    "done",
+    "called",
+    "emailed",
+    "texted",
+    "spoke",
+    "talked",
+    "reached out",
+    "scheduled",
+    "booked",
+]
+
+POSITIVE_CONFIRMATIONS = {
+    "yes",
+    "y",
+    "yep",
+    "yeah",
+    "sure",
+    "please do",
+    "do it",
+    "sounds good",
+    "go ahead",
+    "please",
+}
+
+TASK_STOPWORDS = {
+    "call",
+    "remind",
+    "reminder",
+    "email",
+    "text",
+    "follow",
+    "task",
+    "todo",
+    "please",
+    "need",
+    "contact",
+    "reach",
+    "talk",
+    "speak",
+    "tomorrow",
+    "today",
+    "soon",
+    "check",
+    "look",
+}
+
+NEGATIVE_CONFIRMATIONS = {
+    "no",
+    "n",
+    "not yet",
+    "keep it",
+    "leave it",
+    "later",
+    "still pending",
+}
 
 
 # ----------------------------
@@ -37,12 +101,28 @@ def get_local_services(service: str, city_state: str) -> list[dict]:
     return find_local_services(service, city_state)
 
 
-FUNCTION_REGISTRY = {
-    "get_home_value": lambda args: get_home_value(args["address"]),
-    "get_local_services": lambda args: get_local_services(
-        args["service"], args["city_state"]
-    ),
-}
+def remember_user_task(*, user_id: int, description: str) -> dict:
+    agent_memory.add_task(user_id, description)
+    print("Active tasks:", agent_memory.get_tasks(user_id))  # TEMP DEBUG
+    return {"status": "stored", "tasks": agent_memory.get_tasks(user_id)}
+
+
+def complete_user_task(*, user_id: int, description: str | None = None) -> dict:
+    agent_memory.complete_task(user_id, description)
+    print("Completed tasks:", agent_memory.get_tasks(user_id))  # TEMP DEBUG
+    return {"status": "completed", "tasks": agent_memory.get_tasks(user_id)}
+
+
+def execute_tool(func_name: str, args: dict, *, user_id: int) -> dict:
+    if func_name == "get_home_value":
+        return get_home_value(args["address"])
+    if func_name == "get_local_services":
+        return get_local_services(args["service"], args["city_state"])
+    if func_name == "remember_user_task":
+        return remember_user_task(user_id=user_id, description=args["description"])
+    if func_name == "complete_user_task":
+        return complete_user_task(user_id=user_id, description=args.get("description"))
+    raise ValueError(f"Unsupported function {func_name}")
 
 
 def format_property_summary(properties: list[dict]) -> str:
@@ -89,13 +169,53 @@ def build_agent_response(
     active_property: dict | None,
     all_properties: list[dict],
     requires_property_selection: bool = False,
+    tasks: list[dict] | None = None,
 ) -> dict:
     return {
         "reply": reply,
         "active_property": active_property,
         "available_properties": all_properties,
         "requires_property_selection": requires_property_selection,
+        "tasks": tasks or [],
     }
+
+
+def remember_agent_reply(user_id: int, reply: str) -> None:
+    LAST_AGENT_REPLY[user_id] = reply
+
+
+def find_task_match(message: str, tasks: list[dict]) -> str | None:
+    text = (message or "").lower()
+    if not text or not any(keyword in text for keyword in COMPLETION_KEYWORDS):
+        return None
+
+    best_task = None
+    best_score = 0
+
+    for task in tasks:
+        if task.get("completed"):
+            continue
+        desc = (task.get("description") or "").strip()
+        if not desc:
+            continue
+        desc_lower = desc.lower()
+        if desc_lower and desc_lower in text:
+            return desc
+
+        tokens = [
+            t
+            for t in re.findall(r"[a-z0-9]+", desc_lower)
+            if len(t) >= 3 and t not in TASK_STOPWORDS
+        ]
+        if not tokens:
+            tokens = [desc_lower]
+
+        matches = sum(1 for token in tokens if token and token in text)
+        if matches > best_score:
+            best_score = matches
+            best_task = desc if matches > 0 else best_task
+
+    return best_task if best_score > 0 else None
 
 
 MULTI_PROPERTY_PROMPT = """
@@ -184,46 +304,153 @@ def run_home_agent(
     """
     User-aware Home AI Agent
     """
+    message_text = (message or "").strip()
+    message_lower = message_text.lower()
 
     # ----------------------------
     # Non-property questions path
     # ----------------------------
-    if is_non_property_question(message):
-        PENDING_PROPERTY_REQUESTS.pop(user_id, None)
-        if is_weather_question(message):
-            return build_agent_response(
-                reply=get_chicago_weather_summary(),
-                active_property=None,
-                all_properties=[],
-                requires_property_selection=False,
-            )
+    current_tasks = agent_memory.get_tasks(user_id)
 
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": GENERAL_AGENT_SYSTEM_PROMPT},
-                {"role": "user", "content": message},
-            ],
-            # No property tools for general questions
-        )
-
-        reply_text = response.choices[0].message.content
+    pending_completion = PENDING_TASK_CONFIRMATIONS.get(user_id)
+    if pending_completion and message_lower in POSITIVE_CONFIRMATIONS:
+        complete_user_task(user_id=user_id, description=pending_completion)
+        PENDING_TASK_CONFIRMATIONS.pop(user_id, None)
+        reply_text = f"Got it. I've marked '{pending_completion}' as completed."
+        remember_agent_reply(user_id, reply_text)
         return build_agent_response(
             reply=reply_text,
             active_property=None,
             all_properties=[],
             requires_property_selection=False,
+            tasks=agent_memory.get_tasks(user_id),
         )
+
+    if pending_completion and message_lower in NEGATIVE_CONFIRMATIONS:
+        PENDING_TASK_CONFIRMATIONS.pop(user_id, None)
+        reply_text = (
+            "No problem. I'll keep that reminder active—let me know when it's done."
+        )
+        remember_agent_reply(user_id, reply_text)
+        return build_agent_response(
+            reply=reply_text,
+            active_property=None,
+            all_properties=[],
+            requires_property_selection=False,
+            tasks=agent_memory.get_tasks(user_id),
+        )
+
+    if not pending_completion:
+        matched_task = find_task_match(message_text, current_tasks)
+        if matched_task:
+            PENDING_TASK_CONFIRMATIONS[user_id] = matched_task
+            reply_text = (
+                f"Great! Should I mark \"{matched_task}\" as completed?"
+            )
+            remember_agent_reply(user_id, reply_text)
+            return build_agent_response(
+                reply=reply_text,
+                active_property=None,
+                all_properties=[],
+                requires_property_selection=False,
+                tasks=current_tasks,
+            )
+
+    # ----------------------------
+    # Non-property questions path
+    # ----------------------------
+    if is_non_property_question(message_text):
+        PENDING_PROPERTY_REQUESTS.pop(user_id, None)
+        if is_weather_question(message):
+            reply_text = get_chicago_weather_summary()
+            remember_agent_reply(user_id, reply_text)
+            return build_agent_response(
+                reply=reply_text,
+                active_property=None,
+                all_properties=[],
+                requires_property_selection=False,
+                tasks=agent_memory.get_tasks(user_id),
+            )
+
+        general_messages = [
+            {"role": "system", "content": GENERAL_AGENT_SYSTEM_PROMPT},
+            {"role": "user", "content": message_text},
+        ]
+        general_functions = [
+            {
+                "name": "remember_user_task",
+                "description": "Store a short follow-up task or reminder for the assistant.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "description": {
+                            "type": "string",
+                            "description": "A concise summary of the follow-up action.",
+                        },
+                    },
+                    "required": ["description"],
+                },
+            },
+            {
+                "name": "complete_user_task",
+                "description": "Mark a stored follow-up task as completed.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "description": {
+                            "type": "string",
+                            "description": "Specific task to remove. If omitted, clears all tasks.",
+                        }
+                    },
+                    "required": [],
+                },
+            },
+        ]
+
+        while True:
+            response = client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=general_messages,
+                functions=general_functions,
+                function_call="auto",
+            )
+
+            msg = response.choices[0].message
+            if msg.function_call:
+                func_name = msg.function_call.name
+                args = json.loads(msg.function_call.arguments or "{}")
+                result = execute_tool(func_name, args, user_id=user_id)
+                general_messages.append(
+                    {
+                        "role": "function",
+                        "name": func_name,
+                        "content": json.dumps(result),
+                    }
+                )
+                continue
+
+            reply_text = msg.content or ""
+            remember_agent_reply(user_id, reply_text)
+            return build_agent_response(
+                reply=reply_text,
+                active_property=None,
+                all_properties=[],
+                requires_property_selection=False,
+                tasks=agent_memory.get_tasks(user_id),
+            )
 
     context = resolve_property_context(db, user_id)
 
     # ---- Hard error
     if "error" in context:
+        reply_text = context["error"]
+        remember_agent_reply(user_id, reply_text)
         return build_agent_response(
-            reply=context["error"],
+            reply=reply_text,
             active_property=None,
             all_properties=context.get("all_properties", []),
             requires_property_selection=False,
+            tasks=agent_memory.get_tasks(user_id),
         )
 
     all_properties = context.get("all_properties", [])
@@ -238,11 +465,14 @@ def run_home_agent(
             )
 
             if not selected:
+                reply_text = "Invalid property selection."
+                remember_agent_reply(user_id, reply_text)
                 return build_agent_response(
-                    reply="Invalid property selection.",
+                    reply=reply_text,
                     active_property=None,
                     all_properties=all_properties,
                     requires_property_selection=True,
+                    tasks=agent_memory.get_tasks(user_id),
                 )
 
             active_property = selected
@@ -254,11 +484,13 @@ def run_home_agent(
         if not active_property:
             reply_text = build_multi_property_reply(message, context["options"])
             PENDING_PROPERTY_REQUESTS[user_id] = message
+            remember_agent_reply(user_id, reply_text)
             return build_agent_response(
                 reply=reply_text,
                 active_property=None,
                 all_properties=all_properties,
                 requires_property_selection=True,
+                tasks=agent_memory.get_tasks(user_id),
             )
 
     # ---- Single property
@@ -278,6 +510,15 @@ def run_home_agent(
     if not properties_summary:
         properties_summary = "- No properties available."
 
+    active_tasks = agent_memory.get_tasks(user_id)
+    if active_tasks:
+        tasks_summary = "\n".join(
+            f"- [{'x' if task.get('completed') else ' '}] {task.get('description')}"
+            for task in active_tasks
+        )
+    else:
+        tasks_summary = "- None."
+
     system_prompt = (
         HOME_AGENT_SYSTEM_PROMPT
         + "\n\nUser properties on file:\n"
@@ -287,6 +528,8 @@ def run_home_agent(
         + f"Address: {property_address}\n"
         + f"City/State: {city_state}\n"
         + "Do not ask for the address unless the user explicitly changes properties."
+        + "\n\nActive follow-up tasks:\n"
+        + tasks_summary
     )
 
     agent_message = message
@@ -304,95 +547,151 @@ def run_home_agent(
         else:
             agent_message = f"{pending_property_message}\n\n{selection_note}"
 
-    response = client.chat.completions.create(
-        model="gpt-3.5-turbo",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": agent_message},
-        ],
-        functions=[
-            {
-                "name": "get_home_value",
-                "description": "Get an estimated home value for the user's current property.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "address": {"type": "string"},
-                    },
-                    "required": ["address"],
+    last_agent_note = LAST_AGENT_REPLY.get(user_id)
+    if last_agent_note:
+        agent_message = (
+            "Previous assistant reply:\n"
+            f"{last_agent_note}\n\n"
+            "Latest user message:\n"
+            f"{agent_message}"
+        )
+
+    base_messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": agent_message},
+    ]
+
+    functions_payload = [
+        {
+            "name": "get_home_value",
+            "description": "Get an estimated home value for the user's current property.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "address": {"type": "string"},
                 },
+                "required": ["address"],
             },
-            {
-                "name": "get_local_services",
-                "description": "Find local services near the user's property.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "service": {"type": "string"},
-                        "city_state": {"type": "string"},
-                    },
-                    "required": ["service", "city_state"],
+        },
+        {
+            "name": "get_local_services",
+            "description": "Find local services near the user's property.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "service": {"type": "string"},
+                    "city_state": {"type": "string"},
                 },
+                "required": ["service", "city_state"],
             },
-        ],
-        function_call="auto",
-    )
-
-    msg = response.choices[0].message
-
-    # ----------------------------
-    # Tool execution
-    # ----------------------------
-
-    if msg.function_call:
-        func_name = msg.function_call.name
-        args = json.loads(msg.function_call.arguments)
-
-        # Enforce resolved property context
-        if func_name == "get_home_value":
-            args["address"] = property_address
-
-        if func_name == "get_local_services":
-            args["city_state"] = city_state
-
-        result = FUNCTION_REGISTRY[func_name](args)
-
-        follow_up_messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": agent_message},
-            {
-                "role": "function",
-                "name": func_name,
-                "content": json.dumps(result),
+        },
+        {
+            "name": "remember_user_task",
+            "description": "Store a short follow-up task or reminder for the assistant.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "description": {
+                        "type": "string",
+                        "description": "A concise summary of the follow-up action.",
+                    },
+                },
+                "required": ["description"],
             },
-        ]
+        },
+        {
+            "name": "complete_user_task",
+            "description": "Mark a stored follow-up task as completed.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "description": {
+                        "type": "string",
+                        "description": "Specific task to remove. If omitted, clears all tasks.",
+                    }
+                },
+                "required": [],
+            },
+        },
+    ]
 
-        if func_name == "get_local_services":
-            follow_up_messages.append(
+    MAX_TOOL_CALLS = 2
+    tool_calls = 0
+    messages = list(base_messages)
+
+    while True:
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=messages,
+            functions=functions_payload,
+            function_call="auto",
+        )
+
+        msg = response.choices[0].message
+
+        if msg.function_call:
+            if tool_calls >= MAX_TOOL_CALLS:
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "Please answer the user now using the information you already have. "
+                            "Do not call another tool."
+                        ),
+                    }
+                )
+                continue
+
+            func_name = msg.function_call.name
+            args = json.loads(msg.function_call.arguments)
+
+            if func_name == "get_home_value":
+                args["address"] = property_address
+
+            if func_name == "get_local_services":
+                args["city_state"] = city_state
+
+            result = execute_tool(func_name, args, user_id=user_id)
+
+            messages.append(
                 {
-                    "role": "user",
-                    "content": (
-                        "Use the service entries exactly as provided. "
-                        "Do not add numbering or bullets—keep each entry separated by blank lines."
-                    ),
+                    "role": "function",
+                    "name": func_name,
+                    "content": json.dumps(result),
                 }
             )
 
-        follow_up = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=follow_up_messages,
-        )
+            if func_name == "get_local_services":
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "Use the service entries exactly as provided. "
+                            "Do not add numbering or bullets—keep each entry separated by blank lines."
+                        ),
+                    }
+                )
 
-        reply_text = follow_up.choices[0].message.content
+            tool_calls += 1
+
+            if tool_calls < MAX_TOOL_CALLS:
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "If another tool call would help answer the user, call it now. "
+                            "Otherwise, respond directly."
+                        ),
+                    }
+                )
+
+            continue
+
+        reply_text = msg.content or ""
+        remember_agent_reply(user_id, reply_text)
         return build_agent_response(
             reply=reply_text,
             active_property=active_property,
             all_properties=all_properties,
+            tasks=agent_memory.get_tasks(user_id),
         )
-
-    reply_text = msg.content
-    return build_agent_response(
-        reply=reply_text,
-        active_property=active_property,
-        all_properties=all_properties,
-    )
